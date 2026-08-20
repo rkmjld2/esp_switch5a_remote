@@ -21,6 +21,9 @@ Tables:
 Timezone:
     Asia/Kolkata
 
+Connection Status:
+    ONLINE  = last_seen within 10 seconds
+    OFFLINE = last_seen older than 10 seconds
 ============================================================
 */
 
@@ -28,6 +31,9 @@ require_once __DIR__ . "/config.php";
 require_once __DIR__ . "/db.php";
 
 session_start();
+
+date_default_timezone_set("Asia/Kolkata");
+
 
 /* =========================================================
    LOGOUT
@@ -175,7 +181,11 @@ button:hover {
 if ($login_error !== "") {
 
     echo '<div class="error">' .
-         htmlspecialchars($login_error, ENT_QUOTES, 'UTF-8') .
+         htmlspecialchars(
+             $login_error,
+             ENT_QUOTES,
+             'UTF-8'
+         ) .
          '</div>';
 }
 
@@ -260,16 +270,6 @@ if (isset($_POST["save_start"])) {
 
     }
     else {
-
-        /*
-         * HTML datetime-local gives:
-         *
-         * YYYY-MM-DDTHH:MM
-         *
-         * Convert to:
-         *
-         * YYYY-MM-DD HH:MM:00
-         */
 
         $start_datetime =
             str_replace("T", " ", $start_time);
@@ -490,11 +490,6 @@ if (isset($_POST["set_pin"])) {
 
                 } else {
 
-                    /*
-                     * PIN has already been validated
-                     * as D1-D8.
-                     */
-
                     $sql = "
                         UPDATE esp_control
                         SET `$pin` = ?
@@ -639,11 +634,10 @@ if ($selected_controller !== "") {
             $selected_active =
                 (int)($row["active"] ?? 0);
 
-            /*
-             * IMPORTANT:
-             * NULL last_seen is converted to
-             * "Not yet seen".
-             */
+
+            /* =================================================
+               LAST SEEN
+            ================================================= */
 
             if (
                 isset($row["last_seen"]) &&
@@ -657,13 +651,13 @@ if ($selected_controller !== "") {
             } else {
 
                 $selected_last_seen =
-                    "Not yet seen";
+                    "";
             }
 
 
-            /*
-             * Start and End time may be NULL.
-             */
+            /* =================================================
+               START / END TIME
+            ================================================= */
 
             $selected_start_time =
                 $row["start_time"] ?? "";
@@ -673,6 +667,72 @@ if ($selected_controller !== "") {
         }
 
         $stmt->close();
+    }
+}
+
+
+/* =========================================================
+   CALCULATE ONLINE / OFFLINE STATUS
+========================================================= */
+
+$connection_status = "NOT CONNECTED";
+
+$connection_class = "status-unknown";
+
+$connection_icon = "⚪";
+
+$connection_seconds = null;
+
+
+if (
+    $selected_last_seen !== "" &&
+    $selected_last_seen !== null
+) {
+
+    $last_seen_timestamp =
+        strtotime($selected_last_seen);
+
+    $current_timestamp =
+        time();
+
+
+    if ($last_seen_timestamp !== false) {
+
+        $connection_seconds =
+            $current_timestamp -
+            $last_seen_timestamp;
+
+
+        /*
+         * ONLINE if ESP reported within
+         * the last 10 seconds.
+         */
+
+        if (
+            $connection_seconds >= 0 &&
+            $connection_seconds <= 10
+        ) {
+
+            $connection_status =
+                "ONLINE";
+
+            $connection_class =
+                "status-online";
+
+            $connection_icon =
+                "🟢";
+
+        } else {
+
+            $connection_status =
+                "OFFLINE";
+
+            $connection_class =
+                "status-offline";
+
+            $connection_icon =
+                "🔴";
+        }
     }
 }
 
@@ -697,7 +757,10 @@ if (
     if ($timestamp !== false) {
 
         $start_input_value =
-            date("Y-m-d\TH:i", $timestamp);
+            date(
+                "Y-m-d\TH:i",
+                $timestamp
+            );
     }
 }
 
@@ -713,7 +776,10 @@ if (
     if ($timestamp !== false) {
 
         $end_input_value =
-            date("Y-m-d\TH:i", $timestamp);
+            date(
+                "Y-m-d\TH:i",
+                $timestamp
+            );
     }
 }
 
@@ -1127,6 +1193,44 @@ h1 {
 
 
 /* =========================================================
+   ONLINE / OFFLINE STATUS
+========================================================= */
+
+.connection-status {
+
+    font-size: 18px;
+
+    font-weight: bold;
+
+    padding: 5px 0;
+}
+
+.status-online {
+
+    color: #28a745;
+}
+
+.status-offline {
+
+    color: #dc3545;
+}
+
+.status-unknown {
+
+    color: #6c757d;
+}
+
+.status-details {
+
+    font-size: 12px;
+
+    color: #777;
+
+    margin-top: 4px;
+}
+
+
+/* =========================================================
    D1-D8 GRID
 ========================================================= */
 
@@ -1292,6 +1396,7 @@ button:hover {
         grid-template-columns:
             1fr;
     }
+
 }
 
 </style>
@@ -1661,6 +1766,57 @@ echo $selected_active
 </div>
 
 
+<!-- ======================================================
+     CONNECTION STATUS
+======================================================= -->
+
+<div class="info-card">
+
+<div class="info-title">
+Connection Status
+</div>
+
+<div
+    class="connection-status
+    <?php
+        echo $connection_class;
+    ?>"
+>
+
+<?php
+
+echo $connection_icon . " " .
+     $connection_status;
+
+?>
+
+</div>
+
+<?php
+
+if ($connection_seconds !== null) {
+
+?>
+
+<div class="status-details">
+
+Last report:
+<?php
+echo (int)$connection_seconds;
+?>
+ seconds ago
+
+</div>
+
+<?php
+
+}
+
+?>
+
+</div>
+
+
 <div class="info-card">
 
 <div class="info-title">
@@ -1674,11 +1830,18 @@ Last Seen
 
 <?php
 
-echo htmlspecialchars(
-    $selected_last_seen,
-    ENT_QUOTES,
-    "UTF-8"
-);
+if ($selected_last_seen !== "") {
+
+    echo htmlspecialchars(
+        $selected_last_seen,
+        ENT_QUOTES,
+        "UTF-8"
+    );
+
+} else {
+
+    echo "Not yet seen";
+}
 
 ?>
 
@@ -1936,11 +2099,13 @@ function updateCurrentTime()
     parts.forEach(
         function(part)
         {
+
             if (part.type !== "literal")
             {
                 data[part.type] =
                     part.value;
             }
+
         }
     );
 
