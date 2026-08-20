@@ -2,11 +2,12 @@
 /*
 ============================================================
  ESP-SWITCH5 REMOTE
- OWNER-ONLY DEVICE TOKEN MANAGEMENT
+ OWNER-ONLY DEVICE TOKEN + CONTROLLER STATUS MANAGEMENT
 ============================================================
 
 Purpose:
-    Change the device_token of a controller.
+    1. Change device_token
+    2. Activate / deactivate a controller
 
 IMPORTANT:
     This page is OWNER ONLY.
@@ -26,9 +27,17 @@ Database:
 Table:
     controllers
 
+Important field:
+    active
+
+    active = 1
+        Controller ACTIVE
+
+    active = 0
+        Controller DEACTIVATED
+
 Timezone:
     Asia/Kolkata
-
 ============================================================
 */
 
@@ -73,7 +82,7 @@ if (isset($_GET["logout"])) {
 
 
 /* =========================================================
-   LOGIN
+   OWNER LOGIN
 ========================================================= */
 
 $login_error = "";
@@ -130,7 +139,9 @@ if (
 <meta name="viewport"
       content="width=device-width, initial-scale=1.0">
 
-<title>ESP-SWITCH5 - Owner Login</title>
+<title>
+ESP-SWITCH5 - Owner Login
+</title>
 
 <style>
 
@@ -141,6 +152,7 @@ if (
 body {
 
     margin: 0;
+
     padding: 20px;
 
     font-family:
@@ -311,7 +323,7 @@ OWNER LOGIN
 
 <div class="small">
 
-ESP-SWITCH5 Device Token Management
+ESP-SWITCH5 Owner Management
 
 </div>
 
@@ -402,12 +414,13 @@ if (isset($_POST["change_token"])) {
     else {
 
         /* -------------------------------------------------
-           CHECK CONTROLLER
+           VERIFY CONTROLLER EXISTS
         ------------------------------------------------- */
 
         $stmt =
             $conn->prepare("
-                SELECT controller_id
+                SELECT
+                    controller_id
                 FROM controllers
                 WHERE controller_id = ?
                 LIMIT 1
@@ -462,7 +475,7 @@ if (isset($_POST["change_token"])) {
 
 
                     /* -------------------------------------
-                       UPDATE TOKEN
+                       UPDATE DEVICE TOKEN
                     ------------------------------------- */
 
                     $update =
@@ -521,16 +534,202 @@ if (isset($_POST["change_token"])) {
 
 
 /* =========================================================
+   ACTIVATE / DEACTIVATE CONTROLLER
+========================================================= */
+
+if (isset($_POST["change_status"])) {
+
+    $controller_id =
+        trim(
+            $_POST["controller_id"] ?? ""
+        );
+
+    $new_status =
+        isset($_POST["new_status"])
+            ? (int)$_POST["new_status"]
+            : -1;
+
+
+    /* -----------------------------------------------------
+       VALIDATE CONTROLLER
+    ----------------------------------------------------- */
+
+    if ($controller_id === "") {
+
+        $message =
+            "Controller ID is required.";
+
+        $message_type =
+            "error";
+    }
+
+
+    /* -----------------------------------------------------
+       VALIDATE STATUS
+    ----------------------------------------------------- */
+
+    elseif (
+        $new_status !== 0 &&
+        $new_status !== 1
+    ) {
+
+        $message =
+            "Invalid controller status.";
+
+        $message_type =
+            "error";
+    }
+
+
+    else {
+
+        /*
+         * Get current controller information.
+         */
+
+        $stmt =
+            $conn->prepare("
+                SELECT
+                    controller_id,
+                    device_token,
+                    active
+                FROM controllers
+                WHERE controller_id = ?
+                LIMIT 1
+            ");
+
+
+        if (!$stmt) {
+
+            $message =
+                "Controller status query failed.";
+
+            $message_type =
+                "error";
+
+        } else {
+
+            $stmt->bind_param(
+                "s",
+                $controller_id
+            );
+
+
+            if (!$stmt->execute()) {
+
+                $message =
+                    "Controller status query failed.";
+
+                $message_type =
+                    "error";
+
+                $stmt->close();
+
+            } else {
+
+                $result =
+                    $stmt->get_result();
+
+
+                if ($result->num_rows === 0) {
+
+                    $message =
+                        "Controller not found.";
+
+                    $message_type =
+                        "error";
+
+                    $stmt->close();
+
+                } else {
+
+                    $controller =
+                        $result->fetch_assoc();
+
+                    $stmt->close();
+
+
+                    /* -------------------------------------
+                       UPDATE ACTIVE FIELD
+                    ------------------------------------- */
+
+                    $update =
+                        $conn->prepare("
+                            UPDATE controllers
+                            SET active = ?
+                            WHERE controller_id = ?
+                        ");
+
+
+                    if (!$update) {
+
+                        $message =
+                            "Status update preparation failed.";
+
+                        $message_type =
+                            "error";
+
+                    } else {
+
+                        $update->bind_param(
+                            "is",
+                            $new_status,
+                            $controller_id
+                        );
+
+
+                        if ($update->execute()) {
+
+                            if ($new_status === 1) {
+
+                                $message =
+                                    "Controller " .
+                                    $controller_id .
+                                    " has been ACTIVATED.";
+
+                            } else {
+
+                                $message =
+                                    "Controller " .
+                                    $controller_id .
+                                    " has been DEACTIVATED.";
+                            }
+
+                            $message_type =
+                                "success";
+
+                        } else {
+
+                            $message =
+                                "Controller status update failed.";
+
+                            $message_type =
+                                "error";
+                        }
+
+
+                        $update->close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/* =========================================================
    READ CONTROLLERS
 ========================================================= */
 
 $controllers = [];
+
 
 $result =
     $conn->query("
         SELECT
             controller_id,
             customer_name,
+            device_token,
             active
         FROM controllers
         ORDER BY controller_id
@@ -563,7 +762,7 @@ if ($result) {
       content="width=device-width, initial-scale=1.0">
 
 <title>
-ESP-SWITCH5 - Owner Token Management
+ESP-SWITCH5 - Owner Management
 </title>
 
 <style>
@@ -575,6 +774,7 @@ ESP-SWITCH5 - Owner Token Management
 body {
 
     margin: 0;
+
     padding: 20px;
 
     font-family:
@@ -589,7 +789,7 @@ body {
 
 .container {
 
-    max-width: 700px;
+    max-width: 800px;
 
     margin: 40px auto;
 
@@ -644,67 +844,10 @@ body {
     font-weight: bold;
 }
 
-.form-box {
 
-    background: #f8f9fa;
-
-    border: 1px solid #ddd;
-
-    border-radius: 10px;
-
-    padding: 20px;
-}
-
-label {
-
-    display: block;
-
-    font-weight: bold;
-
-    margin-bottom: 8px;
-}
-
-select,
-input[type="text"] {
-
-    width: 100%;
-
-    padding: 12px;
-
-    font-size: 16px;
-
-    border: 1px solid #aaa;
-
-    border-radius: 6px;
-
-    margin-bottom: 18px;
-}
-
-.change-button {
-
-    width: 100%;
-
-    padding: 13px;
-
-    border: none;
-
-    border-radius: 6px;
-
-    background: #dc3545;
-
-    color: white;
-
-    font-size: 16px;
-
-    font-weight: bold;
-
-    cursor: pointer;
-}
-
-.change-button:hover {
-
-    opacity: 0.85;
-}
+/* =========================================================
+   MESSAGE
+========================================================= */
 
 .message {
 
@@ -732,6 +875,191 @@ input[type="text"] {
 
     color: #721c24;
 }
+
+
+/* =========================================================
+   CONTROLLER STATUS SUMMARY
+========================================================= */
+
+.status-box {
+
+    background: #f8f9fa;
+
+    border: 1px solid #ddd;
+
+    border-radius: 10px;
+
+    padding: 20px;
+
+    margin-bottom: 25px;
+}
+
+.status-box h2 {
+
+    margin-top: 0;
+
+    margin-bottom: 15px;
+
+    text-align: center;
+}
+
+.current-status {
+
+    text-align: center;
+
+    font-size: 20px;
+
+    font-weight: bold;
+
+    margin-bottom: 15px;
+}
+
+.active-status {
+
+    color: #198754;
+}
+
+.inactive-status {
+
+    color: #dc3545;
+}
+
+
+/* =========================================================
+   FORM BOX
+========================================================= */
+
+.form-box {
+
+    background: #f8f9fa;
+
+    border: 1px solid #ddd;
+
+    border-radius: 10px;
+
+    padding: 20px;
+
+    margin-bottom: 25px;
+}
+
+.form-box h2 {
+
+    margin-top: 0;
+
+    color: #333;
+
+    font-size: 20px;
+}
+
+label {
+
+    display: block;
+
+    font-weight: bold;
+
+    margin-bottom: 8px;
+}
+
+select,
+input[type="text"] {
+
+    width: 100%;
+
+    padding: 12px;
+
+    font-size: 16px;
+
+    border: 1px solid #aaa;
+
+    border-radius: 6px;
+
+    margin-bottom: 18px;
+}
+
+
+/* =========================================================
+   BUTTONS
+========================================================= */
+
+.change-button {
+
+    width: 100%;
+
+    padding: 13px;
+
+    border: none;
+
+    border-radius: 6px;
+
+    background: #dc3545;
+
+    color: white;
+
+    font-size: 16px;
+
+    font-weight: bold;
+
+    cursor: pointer;
+}
+
+.change-button:hover {
+
+    opacity: 0.85;
+}
+
+.activate-button {
+
+    width: 100%;
+
+    padding: 13px;
+
+    border: none;
+
+    border-radius: 6px;
+
+    background: #198754;
+
+    color: white;
+
+    font-size: 16px;
+
+    font-weight: bold;
+
+    cursor: pointer;
+}
+
+.deactivate-button {
+
+    width: 100%;
+
+    padding: 13px;
+
+    border: none;
+
+    border-radius: 6px;
+
+    background: #dc3545;
+
+    color: white;
+
+    font-size: 16px;
+
+    font-weight: bold;
+
+    cursor: pointer;
+}
+
+.activate-button:hover,
+.deactivate-button:hover,
+.change-button:hover {
+
+    opacity: 0.85;
+}
+
+
+/* =========================================================
+   NOTE
+========================================================= */
 
 .note {
 
@@ -768,13 +1096,35 @@ input[type="text"] {
     text-decoration: underline;
 }
 
+
+/* =========================================================
+   MOBILE
+========================================================= */
+
+@media (max-width: 600px) {
+
+    body {
+
+        padding: 10px;
+    }
+
+    .container {
+
+        padding: 18px;
+
+        margin-top: 15px;
+    }
+}
+
 </style>
 
 </head>
 
+
 <body>
 
 <div class="container">
+
 
 <div class="header">
 
@@ -783,7 +1133,7 @@ ESP-SWITCH5
 </h1>
 
 <div class="subtitle">
-OWNER DEVICE TOKEN MANAGEMENT
+OWNER DEVICE & CONTROLLER MANAGEMENT
 </div>
 
 </div>
@@ -830,23 +1180,157 @@ echo htmlspecialchars(
 ?>
 
 
-<div class="form-box">
+<!-- ======================================================
+     CONTROLLER STATUS
+======================================================= -->
+
+<div class="status-box">
+
+<h2>
+Controller Activation
+</h2>
+
 
 <form method="post">
 
-<label for="controller_id">
+<label for="status_controller_id">
 Select Controller
 </label>
 
+
 <select
     name="controller_id"
-    id="controller_id"
+    id="status_controller_id"
+    required
+    onchange="showCurrentStatus()"
+>
+
+<option value="">
+-- Select Controller --
+</option>
+
+
+<?php
+
+foreach (
+    $controllers as $controller
+) {
+
+?>
+
+<option
+    value="<?php
+        echo htmlspecialchars(
+            $controller["controller_id"],
+            ENT_QUOTES,
+            "UTF-8"
+        );
+    ?>"
+
+    data-active="<?php
+        echo (int)$controller["active"];
+    ?>"
+>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+
+if (
+    !empty(
+        $controller["customer_name"]
+    )
+) {
+
+    echo
+        " - " .
+        htmlspecialchars(
+            $controller["customer_name"],
+            ENT_QUOTES,
+            "UTF-8"
+        );
+}
+
+?>
+
+</option>
+
+<?php
+
+}
+
+?>
+
+</select>
+
+
+<div
+    id="currentStatus"
+    class="current-status"
+>
+Select a controller.
+</div>
+
+
+<div id="statusButtonArea">
+
+</div>
+
+
+<input
+    type="hidden"
+    name="new_status"
+    id="new_status"
+    value=""
+>
+
+<input
+    type="hidden"
+    name="change_status"
+    value="1"
+>
+
+</form>
+
+</div>
+
+
+<!-- ======================================================
+     DEVICE TOKEN MANAGEMENT
+======================================================= -->
+
+<div class="form-box">
+
+<h2>
+Device Token Management
+</h2>
+
+
+<form method="post">
+
+
+<label for="token_controller_id">
+
+Select Controller
+
+</label>
+
+
+<select
+    name="controller_id"
+    id="token_controller_id"
     required
 >
 
 <option value="">
 -- Select Controller --
 </option>
+
 
 <?php
 
@@ -873,6 +1357,7 @@ echo htmlspecialchars(
     ENT_QUOTES,
     "UTF-8"
 );
+
 
 if (
     !empty(
@@ -903,8 +1388,11 @@ if (
 
 
 <label for="new_token">
+
 Enter New Device Token
+
 </label>
+
 
 <input
     type="text"
@@ -927,7 +1415,9 @@ Enter New Device Token
         );
     "
 >
+
 CHANGE DEVICE TOKEN
+
 </button>
 
 </form>
@@ -935,31 +1425,50 @@ CHANGE DEVICE TOKEN
 </div>
 
 
+<!-- ======================================================
+     IMPORTANT INFORMATION
+======================================================= -->
+
 <div class="note">
 
-<strong>Important:</strong><br><br>
+<strong>Controller Activation:</strong><br><br>
 
-The new Device Token is written directly into the
-<strong>controllers.device_token</strong> field.
+<strong>ACTIVE</strong> means the controller is authorized
+to communicate with the remote server.<br><br>
 
-The ESP8266 must be programmed with exactly the same
-new token.
+<strong>DEACTIVATED</strong> means the controller is
+temporarily disconnected from the customer's service.
 
-For example:
+When a controller is deactivated:
+
+<ul>
+
+<li>
+The server rejects normal ESP8266 communication.
+</li>
+
+<li>
+The controller cannot receive new D1-D8 commands.
+</li>
+
+<li>
+The existing device token remains unchanged.
+</li>
+
+</ul>
+
+When the controller is activated again, the same
+controller ID and device token can be used again.
 
 <br><br>
 
-<strong>
-ESP0001-TOKEN-2026-RAVI1
-</strong>
+<strong>Device Token:</strong><br><br>
 
-<br><br>
+Changing the Device Token replaces the existing
+<strong>controllers.device_token</strong> value.
 
-If the token in the ESP8266 does not match the token
-in the database, the server will reject the ESP8266.
-
-Changing the token therefore immediately invalidates
-the old token.
+The ESP8266 must then be programmed with exactly
+the same new token.
 
 </div>
 
@@ -971,7 +1480,243 @@ the old token.
 Owner Logout
 </a>
 
+
 </div>
+
+
+<script>
+
+/* =========================================================
+   DISPLAY CURRENT STATUS
+========================================================= */
+
+function showCurrentStatus()
+{
+
+    const select =
+        document.getElementById(
+            "status_controller_id"
+        );
+
+    const status =
+        document.getElementById(
+            "currentStatus"
+        );
+
+    const buttonArea =
+        document.getElementById(
+            "statusButtonArea"
+        );
+
+
+    if (
+        !select ||
+        !status ||
+        !buttonArea
+    ) {
+
+        return;
+    }
+
+
+    const selectedOption =
+        select.options[
+            select.selectedIndex
+        ];
+
+
+    if (
+        !selectedOption ||
+        !selectedOption.value
+    ) {
+
+        status.innerHTML =
+            "Select a controller.";
+
+        status.className =
+            "current-status";
+
+        buttonArea.innerHTML =
+            "";
+
+        return;
+    }
+
+
+    const active =
+        selectedOption.getAttribute(
+            "data-active"
+        );
+
+
+    if (active === "1")
+    {
+
+        status.innerHTML =
+            "● ACTIVE";
+
+        status.className =
+            "current-status active-status";
+
+
+        buttonArea.innerHTML =
+
+            '<button ' +
+
+            'type="button" ' +
+
+            'class="deactivate-button" ' +
+
+            'onclick="deactivateController()">' +
+
+            'DEACTIVATE CONTROLLER' +
+
+            '</button>';
+
+    }
+    else
+    {
+
+        status.innerHTML =
+            "● DEACTIVATED";
+
+        status.className =
+            "current-status inactive-status";
+
+
+        buttonArea.innerHTML =
+
+            '<button ' +
+
+            'type="button" ' +
+
+            'class="activate-button" ' +
+
+            'onclick="activateController()">' +
+
+            'ACTIVATE CONTROLLER' +
+
+            '</button>';
+    }
+}
+
+
+/* =========================================================
+   ACTIVATE
+========================================================= */
+
+function activateController()
+{
+
+    const select =
+        document.getElementById(
+            "status_controller_id"
+        );
+
+    const selected =
+        select.options[
+            select.selectedIndex
+        ];
+
+    if (
+        !selected ||
+        !selected.value
+    ) {
+
+        return;
+    }
+
+
+    const controller =
+        selected.value;
+
+
+    const answer =
+        confirm(
+            "Activate controller " +
+            controller +
+            "?"
+        );
+
+
+    if (!answer)
+    {
+        return;
+    }
+
+
+    document.getElementById(
+        "new_status"
+    ).value = "1";
+
+
+    select.form.submit();
+}
+
+
+/* =========================================================
+   DEACTIVATE
+========================================================= */
+
+function deactivateController()
+{
+
+    const select =
+        document.getElementById(
+            "status_controller_id"
+        );
+
+    const selected =
+        select.options[
+            select.selectedIndex
+        ];
+
+    if (
+        !selected ||
+        !selected.value
+    ) {
+
+        return;
+    }
+
+
+    const controller =
+        selected.value;
+
+
+    const answer =
+        confirm(
+            "Deactivate controller " +
+            controller +
+            "?\n\n" +
+            "The customer's controller will " +
+            "temporarily lose remote service."
+        );
+
+
+    if (!answer)
+    {
+        return;
+    }
+
+
+    document.getElementById(
+        "new_status"
+    ).value = "0";
+
+
+    select.form.submit();
+}
+
+
+/* =========================================================
+   INITIAL STATUS
+========================================================= */
+
+showCurrentStatus();
+
+</script>
+
 
 </body>
 
