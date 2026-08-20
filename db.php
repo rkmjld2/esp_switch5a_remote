@@ -1,17 +1,17 @@
 <?php
 /*
  * ============================================================
- * ESP-SWITCH5 REMOTE - db.php
+ * ESP-SWITCH5A REMOTE - db.php
  * ============================================================
  *
  * Database:
  *     TiDB Cloud
  *
+ * SSL/TLS:
+ *     REQUIRED
+ *
  * Configuration:
  *     config.php
- *
- * Credentials:
- *     Render Environment Variables
  * ============================================================
  */
 
@@ -27,20 +27,38 @@ require_once __DIR__ . "/config.php";
    DATABASE CONNECTION
 ========================================================= */
 
-$conn = new mysqli(
-    $db_host,
-    $db_user,
-    $db_password,
-    $db_name,
-    (int)$db_port
+$conn = mysqli_init();
+
+
+/* =========================================================
+   ENABLE TLS / SSL
+========================================================= */
+
+mysqli_ssl_set(
+    $conn,
+    null,
+    null,
+    null,
+    null,
+    null
 );
 
 
 /* =========================================================
-   CONNECTION ERROR
+   CONNECT TO TiDB CLOUD
 ========================================================= */
 
-if ($conn->connect_error) {
+if (
+    !$conn->real_connect(
+        $db_host,
+        $db_user,
+        $db_password,
+        $db_name,
+        (int)$db_port,
+        null,
+        MYSQLI_CLIENT_SSL
+    )
+) {
 
     if (DEBUG_MODE) {
 
