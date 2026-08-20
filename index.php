@@ -21,18 +21,15 @@ Tables:
 Timezone:
     Asia/Kolkata
 
-Connection Status:
-    ONLINE  = last_seen within 10 seconds
-    OFFLINE = last_seen older than 10 seconds
 ============================================================
 */
 
 require_once __DIR__ . "/config.php";
 require_once __DIR__ . "/db.php";
 
-session_start();
-
 date_default_timezone_set("Asia/Kolkata");
+
+session_start();
 
 
 /* =========================================================
@@ -270,6 +267,16 @@ if (isset($_POST["save_start"])) {
 
     }
     else {
+
+        /*
+         * HTML datetime-local gives:
+         *
+         * YYYY-MM-DDTHH:MM
+         *
+         * Convert to:
+         *
+         * YYYY-MM-DD HH:MM:00
+         */
 
         $start_datetime =
             str_replace("T", " ", $start_time);
@@ -635,10 +642,6 @@ if ($selected_controller !== "") {
                 (int)($row["active"] ?? 0);
 
 
-            /* =================================================
-               LAST SEEN
-            ================================================= */
-
             if (
                 isset($row["last_seen"]) &&
                 $row["last_seen"] !== null &&
@@ -651,13 +654,9 @@ if ($selected_controller !== "") {
             } else {
 
                 $selected_last_seen =
-                    "";
+                    "Not yet seen";
             }
 
-
-            /* =================================================
-               START / END TIME
-            ================================================= */
 
             $selected_start_time =
                 $row["start_time"] ?? "";
@@ -667,72 +666,6 @@ if ($selected_controller !== "") {
         }
 
         $stmt->close();
-    }
-}
-
-
-/* =========================================================
-   CALCULATE ONLINE / OFFLINE STATUS
-========================================================= */
-
-$connection_status = "NOT CONNECTED";
-
-$connection_class = "status-unknown";
-
-$connection_icon = "⚪";
-
-$connection_seconds = null;
-
-
-if (
-    $selected_last_seen !== "" &&
-    $selected_last_seen !== null
-) {
-
-    $last_seen_timestamp =
-        strtotime($selected_last_seen);
-
-    $current_timestamp =
-        time();
-
-
-    if ($last_seen_timestamp !== false) {
-
-        $connection_seconds =
-            $current_timestamp -
-            $last_seen_timestamp;
-
-
-        /*
-         * ONLINE if ESP reported within
-         * the last 10 seconds.
-         */
-
-        if (
-            $connection_seconds >= 0 &&
-            $connection_seconds <= 10
-        ) {
-
-            $connection_status =
-                "ONLINE";
-
-            $connection_class =
-                "status-online";
-
-            $connection_icon =
-                "🟢";
-
-        } else {
-
-            $connection_status =
-                "OFFLINE";
-
-            $connection_class =
-                "status-offline";
-
-            $connection_icon =
-                "🔴";
-        }
     }
 }
 
@@ -1007,7 +940,7 @@ h1 {
 
     border-radius: 10px;
 
-    padding: 20px;
+    padding: 25px;
 
     margin-bottom: 25px;
 
@@ -1018,19 +951,26 @@ h1 {
 
     margin-top: 0;
 
-    margin-bottom: 5px;
+    margin-bottom: 8px;
 
     color: #333;
+
+    font-size: 24px;
 }
 
 .timezone {
 
     color: #555;
 
-    font-size: 14px;
+    font-size: 15px;
 
-    margin-bottom: 20px;
+    margin-bottom: 25px;
 }
+
+
+/* =========================================================
+   LARGER TIME SELECTION AREA
+========================================================= */
 
 .time-row {
 
@@ -1042,7 +982,7 @@ h1 {
             1fr
         );
 
-    gap: 20px;
+    gap: 25px;
 
     margin-bottom: 15px;
 }
@@ -1053,9 +993,9 @@ h1 {
 
     border: 1px solid #ccc;
 
-    border-radius: 8px;
+    border-radius: 10px;
 
-    padding: 15px;
+    padding: 20px;
 }
 
 .time-box label {
@@ -1064,25 +1004,75 @@ h1 {
 
     font-weight: bold;
 
-    margin-bottom: 8px;
+    margin-bottom: 12px;
+
+    font-size: 17px;
 }
 
-.time-box input {
+
+/*
+============================================================
+IMPORTANT:
+LARGE DATE/TIME INPUT
+
+This makes the calendar/time control much easier
+to click and use.
+============================================================
+*/
+
+.time-box input[type="datetime-local"] {
 
     width: 100%;
 
-    padding: 10px;
+    height: 58px;
 
-    border: 1px solid #aaa;
+    padding: 10px 12px;
 
-    border-radius: 6px;
+    border: 2px solid #888;
 
-    font-size: 15px;
+    border-radius: 8px;
+
+    font-size: 18px;
+
+    background: #ffffff;
+
+    color: #222;
+
+    cursor: pointer;
+
 }
+
+
+/* Larger calendar/time icon */
+
+.time-box input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+
+    width: 30px;
+
+    height: 30px;
+
+    cursor: pointer;
+
+}
+
+
+/* Highlight when selected */
+
+.time-box input[type="datetime-local"]:focus {
+
+    outline: none;
+
+    border-color: #007bff;
+
+    box-shadow:
+        0 0 5px
+        rgba(0,123,255,0.35);
+}
+
 
 .save-button {
 
-    margin-top: 10px;
+    margin-top: 15px;
 
     width: 100%;
 
@@ -1092,11 +1082,11 @@ h1 {
 
     border: none;
 
-    border-radius: 6px;
+    border-radius: 7px;
 
-    padding: 10px;
+    padding: 13px;
 
-    font-size: 15px;
+    font-size: 17px;
 
     cursor: pointer;
 }
@@ -1113,7 +1103,7 @@ h1 {
 
 .current-time-box {
 
-    margin-top: 18px;
+    margin-top: 20px;
 
     background: #fff;
 
@@ -1193,40 +1183,21 @@ h1 {
 
 
 /* =========================================================
-   ONLINE / OFFLINE STATUS
+   ONLINE / OFFLINE
 ========================================================= */
 
-.connection-status {
+.online {
 
-    font-size: 18px;
+    color: #198754;
 
     font-weight: bold;
-
-    padding: 5px 0;
 }
 
-.status-online {
-
-    color: #28a745;
-}
-
-.status-offline {
+.offline {
 
     color: #dc3545;
-}
 
-.status-unknown {
-
-    color: #6c757d;
-}
-
-.status-details {
-
-    font-size: 12px;
-
-    color: #777;
-
-    margin-top: 4px;
+    font-weight: bold;
 }
 
 
@@ -1395,6 +1366,26 @@ button:hover {
 
         grid-template-columns:
             1fr;
+    }
+
+
+    /*
+     * On mobile make the date/time
+     * control even easier to use.
+     */
+
+    .time-box {
+
+        padding: 18px;
+    }
+
+    .time-box input[type="datetime-local"] {
+
+        height: 62px;
+
+        font-size: 18px;
+
+        padding: 10px;
     }
 
 }
@@ -1745,74 +1736,57 @@ echo htmlspecialchars(
 <div class="info-card">
 
 <div class="info-title">
-Active
-</div>
-
-<div
-    class="info-value"
-    id="activeStatus"
->
-
-<?php
-
-echo $selected_active
-    ? "YES"
-    : "NO";
-
-?>
-
-</div>
-
-</div>
-
-
-<!-- ======================================================
-     CONNECTION STATUS
-======================================================= -->
-
-<div class="info-card">
-
-<div class="info-title">
 Connection Status
 </div>
 
 <div
-    class="connection-status
-    <?php
-        echo $connection_class;
-    ?>"
+    class="info-value"
+    id="connectionStatus"
 >
 
 <?php
 
-echo $connection_icon . " " .
-     $connection_status;
+/*
+ * Determine ONLINE/OFFLINE.
+ *
+ * Controller is considered ONLINE when
+ * last_seen is within the last 15 seconds.
+ */
 
-?>
+$is_online = false;
 
-</div>
+if (
+    $selected_last_seen !== "" &&
+    $selected_last_seen !== "Not yet seen"
+) {
 
-<?php
+    $last_seen_timestamp =
+        strtotime($selected_last_seen);
 
-if ($connection_seconds !== null) {
+    if ($last_seen_timestamp !== false) {
 
-?>
+        if (
+            (time() - $last_seen_timestamp)
+            <= 15
+        ) {
 
-<div class="status-details">
+            $is_online = true;
+        }
+    }
+}
 
-Last report:
-<?php
-echo (int)$connection_seconds;
-?>
- seconds ago
+if ($is_online) {
 
-</div>
+    echo '<span class="online">● ONLINE</span>';
 
-<?php
+} else {
 
+    echo '<span class="offline">● OFFLINE</span>';
 }
 
 ?>
+
+</div>
 
 </div>
 
@@ -1830,18 +1804,35 @@ Last Seen
 
 <?php
 
-if ($selected_last_seen !== "") {
+echo htmlspecialchars(
+    $selected_last_seen,
+    ENT_QUOTES,
+    "UTF-8"
+);
 
-    echo htmlspecialchars(
-        $selected_last_seen,
-        ENT_QUOTES,
-        "UTF-8"
-    );
+?>
 
-} else {
+</div>
 
-    echo "Not yet seen";
-}
+</div>
+
+
+<div class="info-card">
+
+<div class="info-title">
+Active
+</div>
+
+<div
+    class="info-value"
+    id="activeStatus"
+>
+
+<?php
+
+echo $selected_active
+    ? "YES"
+    : "NO";
 
 ?>
 
@@ -2102,10 +2093,10 @@ function updateCurrentTime()
 
             if (part.type !== "literal")
             {
+
                 data[part.type] =
                     part.value;
             }
-
         }
     );
 
