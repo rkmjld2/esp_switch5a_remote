@@ -1,4 +1,4 @@
-```php
+
 <?php
 
 /*
@@ -536,4 +536,4 @@ function downloadQR()
 </body>
 
 </html>
-```
+
