@@ -2,44 +2,36 @@
 /*
 ============================================================
  ESP-SWITCH5 REMOTE
- OWNER-ONLY DEVICE TOKEN + CONTROLLER STATUS MANAGEMENT
+ OWNER-ONLY CONTROLLER MANAGEMENT
 ============================================================
 
-Purpose:
-    1. Change device_token
-    2. Activate / deactivate a controller
+OWNER TIME CONTROL
+
+Customer schedule:
+    start_time
+    end_time
+
+Owner schedule:
+    owner_start_time
+    owner_end_time
 
 IMPORTANT:
-    This page is OWNER ONLY.
 
-    Customers must NOT receive:
-        owner_token.php
+    Owner time is separate from customer time.
 
-Authentication:
-    TOKEN_PASSWORD environment variable
+    Owner END TIME is the maximum allowed time.
 
-Database:
-    TiDB Cloud
-
-Database:
-    esp_switch5
-
-Table:
-    controllers
-
-Important field:
-    active
-
-    active = 1
-        Controller ACTIVE
-
-    active = 0
-        Controller DEACTIVATED
-
-Timezone:
-    Asia/Kolkata
 ============================================================
 */
+
+
+/* =========================================================
+   SESSION
+========================================================= */
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 
 
 /* =========================================================
@@ -57,41 +49,67 @@ require_once __DIR__ . "/db.php";
 
 
 /* =========================================================
-   SESSION
+   TIMEZONE
 ========================================================= */
 
-session_start();
+date_default_timezone_set("Asia/Kolkata");
 
 
 /* =========================================================
-   LOGOUT
+   VARIABLES
 ========================================================= */
 
-if (isset($_GET["logout"])) {
+$login_error = "";
 
-    $_SESSION = [];
+$message = "";
 
-    session_destroy();
+$message_type = "";
 
-    header(
-        "Location: owner_token.php"
+$edit_controller = null;
+
+
+/* =========================================================
+   HELPER
+========================================================= */
+
+function datetime_local_value($value)
+{
+    if ($value === null || $value === "") {
+        return "";
+    }
+
+    $timestamp = strtotime($value);
+
+    if ($timestamp === false) {
+        return "";
+    }
+
+    return date(
+        "Y-m-d\TH:i",
+        $timestamp
     );
-
-    exit;
 }
+
+
+/* =========================================================
+   CURRENT IST TIME
+========================================================= */
+
+$current_time =
+    new DateTime(
+        "now",
+        new DateTimeZone("Asia/Kolkata")
+    );
 
 
 /* =========================================================
    OWNER LOGIN
 ========================================================= */
 
-$login_error = "";
-
 if (isset($_POST["owner_login"])) {
 
     $password =
         $_POST["owner_password"] ?? "";
-
 
     if (
         $token_password !== "" &&
@@ -103,9 +121,7 @@ if (isset($_POST["owner_login"])) {
 
         $_SESSION["esp_owner"] = true;
 
-        header(
-            "Location: owner_token.php"
-        );
+        header("Location: owner_token.php");
 
         exit;
 
@@ -118,7 +134,39 @@ if (isset($_POST["owner_login"])) {
 
 
 /* =========================================================
-   OWNER LOGIN PAGE
+   OWNER LOGOUT
+========================================================= */
+
+if (isset($_GET["logout"])) {
+
+    $_SESSION = [];
+
+    if (ini_get("session.use_cookies")) {
+
+        $params =
+            session_get_cookie_params();
+
+        setcookie(
+            session_name(),
+            "",
+            time() - 42000,
+            $params["path"],
+            $params["domain"],
+            $params["secure"],
+            $params["httponly"]
+        );
+    }
+
+    session_destroy();
+
+    header("Location: owner_token.php");
+
+    exit;
+}
+
+
+/* =========================================================
+   OWNER LOGIN CHECK
 ========================================================= */
 
 if (
@@ -282,6 +330,7 @@ OWNER ACCESS
 <div class="warning">
 
 This page is for owner use only.<br>
+
 Do not give this page or its password to customers.
 
 </div>
@@ -323,7 +372,7 @@ OWNER LOGIN
 
 <div class="small">
 
-ESP-SWITCH5 Owner Management
+ESP-SWITCH5 Controller Management
 
 </div>
 
@@ -341,34 +390,16 @@ exit;
 
 
 /* =========================================================
-   MESSAGE
+   DELETE CONTROLLER
 ========================================================= */
 
-$message = "";
-
-$message_type = "";
-
-
-/* =========================================================
-   CHANGE DEVICE TOKEN
-========================================================= */
-
-if (isset($_POST["change_token"])) {
+if (isset($_POST["delete_controller"])) {
 
     $controller_id =
         trim(
             $_POST["controller_id"] ?? ""
         );
 
-    $new_token =
-        trim(
-            $_POST["new_token"] ?? ""
-        );
-
-
-    /* -----------------------------------------------------
-       VALIDATE CONTROLLER ID
-    ----------------------------------------------------- */
 
     if ($controller_id === "") {
 
@@ -377,60 +408,421 @@ if (isset($_POST["change_token"])) {
 
         $message_type =
             "error";
+
+    } else {
+
+        $stmt =
+            $conn->prepare("
+                DELETE FROM controllers
+                WHERE controller_id = ?
+                LIMIT 1
+            ");
+
+
+        if (!$stmt) {
+
+            $message =
+                "Delete preparation failed.";
+
+            $message_type =
+                "error";
+
+        } else {
+
+            $stmt->bind_param(
+                "s",
+                $controller_id
+            );
+
+
+            try {
+
+                if ($stmt->execute()) {
+
+                    if (
+                        $stmt->affected_rows > 0
+                    ) {
+
+                        $message =
+                            "Controller " .
+                            $controller_id .
+                            " deleted successfully.";
+
+                        $message_type =
+                            "success";
+
+                    } else {
+
+                        $message =
+                            "Controller not found.";
+
+                        $message_type =
+                            "error";
+                    }
+
+                } else {
+
+                    $message =
+                        "Controller deletion failed.";
+
+                    $message_type =
+                        "error";
+                }
+
+            }
+            catch (mysqli_sql_exception $e) {
+
+                $message =
+                    "Controller could not be deleted. " .
+                    "It may be referenced by another table.";
+
+                $message_type =
+                    "error";
+            }
+
+            $stmt->close();
+        }
     }
+}
 
 
-    /* -----------------------------------------------------
-       VALIDATE TOKEN
-    ----------------------------------------------------- */
+/* =========================================================
+   ACTIVATE CONTROLLER
+========================================================= */
 
-    elseif ($new_token === "") {
+if (isset($_POST["activate_controller"])) {
+
+    $controller_id =
+        trim(
+            $_POST["controller_id"] ?? ""
+        );
+
+
+    if ($controller_id === "") {
 
         $message =
-            "New Device Token is required.";
+            "Controller ID is required.";
 
         $message_type =
             "error";
+
+    } else {
+
+        $stmt =
+            $conn->prepare("
+                UPDATE controllers
+                SET active = 1
+                WHERE controller_id = ?
+            ");
+
+
+        if (!$stmt) {
+
+            $message =
+                "Activation preparation failed.";
+
+            $message_type =
+                "error";
+
+        } else {
+
+            $stmt->bind_param(
+                "s",
+                $controller_id
+            );
+
+
+            if ($stmt->execute()) {
+
+                $message =
+                    "Controller " .
+                    $controller_id .
+                    " activated successfully.";
+
+                $message_type =
+                    "success";
+
+            } else {
+
+                $message =
+                    "Controller activation failed.";
+
+                $message_type =
+                    "error";
+            }
+
+            $stmt->close();
+        }
     }
+}
 
 
+/* =========================================================
+   DEACTIVATE CONTROLLER
+========================================================= */
+
+if (isset($_POST["deactivate_controller"])) {
+
+    $controller_id =
+        trim(
+            $_POST["controller_id"] ?? ""
+        );
+
+
+    if ($controller_id === "") {
+
+        $message =
+            "Controller ID is required.";
+
+        $message_type =
+            "error";
+
+    } else {
+
+        $stmt =
+            $conn->prepare("
+                UPDATE controllers
+                SET active = 0
+                WHERE controller_id = ?
+            ");
+
+
+        if (!$stmt) {
+
+            $message =
+                "Deactivation preparation failed.";
+
+            $message_type =
+                "error";
+
+        } else {
+
+            $stmt->bind_param(
+                "s",
+                $controller_id
+            );
+
+
+            if ($stmt->execute()) {
+
+                $message =
+                    "Controller " .
+                    $controller_id .
+                    " deactivated successfully.";
+
+                $message_type =
+                    "success";
+
+            } else {
+
+                $message =
+                    "Controller deactivation failed.";
+
+                $message_type =
+                    "error";
+            }
+
+            $stmt->close();
+        }
+    }
+}
+
+
+/* =========================================================
+   ADD CONTROLLER
+========================================================= */
+
+if (isset($_POST["add_controller"])) {
+
+    $controller_id =
+        trim(
+            $_POST["controller_id"] ?? ""
+        );
+
+    $customer_token =
+        trim(
+            $_POST["customer_token"] ?? ""
+        );
+
+    $device_token =
+        trim(
+            $_POST["device_token"] ?? ""
+        );
+
+    $customer_name =
+        trim(
+            $_POST["customer_name"] ?? ""
+        );
+
+    $active =
+        isset($_POST["active"])
+            ? (int)$_POST["active"]
+            : 1;
+
+    $owner_start_time =
+        trim(
+            $_POST["owner_start_time"] ?? ""
+        );
+
+    $owner_end_time =
+        trim(
+            $_POST["owner_end_time"] ?? ""
+        );
+
+
+    /* =====================================================
+       VALIDATION
+    ===================================================== */
+
+    if ($controller_id === "") {
+
+        $message =
+            "Controller ID is required.";
+
+        $message_type =
+            "error";
+
+    }
     elseif (
         !preg_match(
-            '/^[A-Za-z0-9_-]{8,100}$/',
-            $new_token
+            '/^[A-Za-z0-9_-]{1,50}$/',
+            $controller_id
         )
     ) {
 
         $message =
-            "Invalid Device Token. " .
-            "Use 8-100 characters containing " .
-            "letters, numbers, hyphen or underscore.";
+            "Invalid Controller ID.";
 
         $message_type =
             "error";
+
     }
+    elseif (
+        $customer_token !== "" &&
+        !preg_match(
+            '/^[A-Za-z0-9_-]{1,100}$/',
+            $customer_token
+        )
+    ) {
 
+        $message =
+            "Invalid Customer Token.";
 
+        $message_type =
+            "error";
+
+    }
+    elseif ($device_token === "") {
+
+        $message =
+            "Device Token is required.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        !preg_match(
+            '/^[A-Za-z0-9_-]{8,100}$/',
+            $device_token
+        )
+    ) {
+
+        $message =
+            "Invalid Device Token.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        strlen($customer_name) > 100
+    ) {
+
+        $message =
+            "Customer name is too long.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        ($owner_start_time === "" &&
+         $owner_end_time !== "") ||
+        ($owner_start_time !== "" &&
+         $owner_end_time === "")
+    ) {
+
+        $message =
+            "Please enter both OWNER START TIME and OWNER END TIME.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        $owner_start_time !== "" &&
+        $owner_end_time !== "" &&
+        strtotime($owner_end_time) <=
+        strtotime($owner_start_time)
+    ) {
+
+        $message =
+            "OWNER END TIME must be later than OWNER START TIME.";
+
+        $message_type =
+            "error";
+
+    }
     else {
 
-        /* -------------------------------------------------
-           VERIFY CONTROLLER EXISTS
-        ------------------------------------------------- */
+        $owner_start_db = null;
+        $owner_end_db = null;
+
+
+        if ($owner_start_time !== "") {
+
+            $owner_start_db =
+                str_replace(
+                    "T",
+                    " ",
+                    $owner_start_time
+                ) . ":00";
+        }
+
+
+        if ($owner_end_time !== "") {
+
+            $owner_end_db =
+                str_replace(
+                    "T",
+                    " ",
+                    $owner_end_time
+                ) . ":00";
+        }
+
 
         $stmt =
             $conn->prepare("
-                SELECT
-                    controller_id
-                FROM controllers
-                WHERE controller_id = ?
-                LIMIT 1
+                INSERT INTO controllers
+                (
+                    controller_id,
+                    customer_token,
+                    device_token,
+                    customer_name,
+                    active,
+                    owner_start_time,
+                    owner_end_time
+                )
+                VALUES
+                (?, ?, ?, ?, ?, ?, ?)
             ");
 
 
         if (!$stmt) {
 
             $message =
-                "Controller query preparation failed.";
+                "Controller insertion preparation failed.";
 
             $message_type =
                 "error";
@@ -438,171 +830,272 @@ if (isset($_POST["change_token"])) {
         } else {
 
             $stmt->bind_param(
-                "s",
-                $controller_id
+                "ssssiss",
+                $controller_id,
+                $customer_token,
+                $device_token,
+                $customer_name,
+                $active,
+                $owner_start_db,
+                $owner_end_db
             );
 
 
-            if (!$stmt->execute()) {
+            try {
 
-                $message =
-                    "Controller verification failed.";
-
-                $message_type =
-                    "error";
-
-                $stmt->close();
-
-            } else {
-
-                $result =
-                    $stmt->get_result();
-
-
-                if ($result->num_rows === 0) {
+                if ($stmt->execute()) {
 
                     $message =
-                        "Controller not found.";
+                        "Controller " .
+                        $controller_id .
+                        " added successfully.";
 
                     $message_type =
-                        "error";
-
-                    $stmt->close();
+                        "success";
 
                 } else {
 
-                    $stmt->close();
+                    $message =
+                        "Could not add controller.";
 
-
-                    /* -------------------------------------
-                       UPDATE DEVICE TOKEN
-                    ------------------------------------- */
-
-                    $update =
-                        $conn->prepare("
-                            UPDATE controllers
-                            SET device_token = ?
-                            WHERE controller_id = ?
-                        ");
-
-
-                    if (!$update) {
-
-                        $message =
-                            "Token update preparation failed.";
-
-                        $message_type =
-                            "error";
-
-                    } else {
-
-                        $update->bind_param(
-                            "ss",
-                            $new_token,
-                            $controller_id
-                        );
-
-
-                        if ($update->execute()) {
-
-                            $message =
-                                "Device Token changed successfully " .
-                                "for controller " .
-                                $controller_id .
-                                ".";
-
-                            $message_type =
-                                "success";
-
-                        } else {
-
-                            $message =
-                                "Device Token update failed.";
-
-                            $message_type =
-                                "error";
-                        }
-
-
-                        $update->close();
-                    }
+                    $message_type =
+                        "error";
                 }
+
             }
+            catch (mysqli_sql_exception $e) {
+
+                if (
+                    $e->getCode() == 1062
+                ) {
+
+                    $message =
+                        "Controller ID or Device Token already exists.";
+
+                } else {
+
+                    $message =
+                        "Could not add controller.";
+                }
+
+                $message_type =
+                    "error";
+            }
+
+
+            $stmt->close();
         }
     }
 }
 
 
 /* =========================================================
-   ACTIVATE / DEACTIVATE CONTROLLER
+   UPDATE CONTROLLER
 ========================================================= */
 
-if (isset($_POST["change_status"])) {
+if (isset($_POST["update_controller"])) {
+
+    $original_controller_id =
+        trim(
+            $_POST["original_controller_id"] ?? ""
+        );
 
     $controller_id =
         trim(
             $_POST["controller_id"] ?? ""
         );
 
-    $new_status =
-        isset($_POST["new_status"])
-            ? (int)$_POST["new_status"]
-            : -1;
+    $customer_token =
+        trim(
+            $_POST["customer_token"] ?? ""
+        );
+
+    $device_token =
+        trim(
+            $_POST["device_token"] ?? ""
+        );
+
+    $customer_name =
+        trim(
+            $_POST["customer_name"] ?? ""
+        );
+
+    $active =
+        isset($_POST["active"])
+            ? (int)$_POST["active"]
+            : 1;
+
+    $owner_start_time =
+        trim(
+            $_POST["owner_start_time"] ?? ""
+        );
+
+    $owner_end_time =
+        trim(
+            $_POST["owner_end_time"] ?? ""
+        );
 
 
     /* -----------------------------------------------------
-       VALIDATE CONTROLLER
+       VALIDATE
     ----------------------------------------------------- */
 
-    if ($controller_id === "") {
+    if ($original_controller_id === "") {
+
+        $message =
+            "Original Controller ID is missing.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif ($controller_id === "") {
 
         $message =
             "Controller ID is required.";
 
         $message_type =
             "error";
+
     }
-
-
-    /* -----------------------------------------------------
-       VALIDATE STATUS
-    ----------------------------------------------------- */
-
     elseif (
-        $new_status !== 0 &&
-        $new_status !== 1
+        !preg_match(
+            '/^[A-Za-z0-9_-]{1,50}$/',
+            $controller_id
+        )
     ) {
 
         $message =
-            "Invalid controller status.";
+            "Invalid Controller ID.";
 
         $message_type =
             "error";
+
     }
+    elseif (
+        $customer_token !== "" &&
+        !preg_match(
+            '/^[A-Za-z0-9_-]{1,100}$/',
+            $customer_token
+        )
+    ) {
 
+        $message =
+            "Invalid Customer Token.";
 
+        $message_type =
+            "error";
+
+    }
+    elseif ($device_token === "") {
+
+        $message =
+            "Device Token is required.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        !preg_match(
+            '/^[A-Za-z0-9_-]{8,100}$/',
+            $device_token
+        )
+    ) {
+
+        $message =
+            "Invalid Device Token.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        strlen($customer_name) > 100
+    ) {
+
+        $message =
+            "Customer name is too long.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        ($owner_start_time === "" &&
+         $owner_end_time !== "") ||
+        ($owner_start_time !== "" &&
+         $owner_end_time === "")
+    ) {
+
+        $message =
+            "Please enter both OWNER START TIME and OWNER END TIME.";
+
+        $message_type =
+            "error";
+
+    }
+    elseif (
+        $owner_start_time !== "" &&
+        $owner_end_time !== "" &&
+        strtotime($owner_end_time) <=
+        strtotime($owner_start_time)
+    ) {
+
+        $message =
+            "OWNER END TIME must be later than OWNER START TIME.";
+
+        $message_type =
+            "error";
+
+    }
     else {
 
-        /*
-         * Get current controller information.
-         */
+        $owner_start_db = null;
+        $owner_end_db = null;
+
+
+        if ($owner_start_time !== "") {
+
+            $owner_start_db =
+                str_replace(
+                    "T",
+                    " ",
+                    $owner_start_time
+                ) . ":00";
+        }
+
+
+        if ($owner_end_time !== "") {
+
+            $owner_end_db =
+                str_replace(
+                    "T",
+                    " ",
+                    $owner_end_time
+                ) . ":00";
+        }
+
 
         $stmt =
             $conn->prepare("
-                SELECT
-                    controller_id,
-                    device_token,
-                    active
-                FROM controllers
+                UPDATE controllers
+                SET
+                    controller_id = ?,
+                    customer_token = ?,
+                    device_token = ?,
+                    customer_name = ?,
+                    active = ?,
+                    owner_start_time = ?,
+                    owner_end_time = ?
                 WHERE controller_id = ?
-                LIMIT 1
             ");
 
 
         if (!$stmt) {
 
             $message =
-                "Controller status query failed.";
+                "Controller update preparation failed.";
 
             $message_type =
                 "error";
@@ -610,115 +1103,219 @@ if (isset($_POST["change_status"])) {
         } else {
 
             $stmt->bind_param(
-                "s",
-                $controller_id
+                "ssssisss",
+                $controller_id,
+                $customer_token,
+                $device_token,
+                $customer_name,
+                $active,
+                $owner_start_db,
+                $owner_end_db,
+                $original_controller_id
             );
 
 
-            if (!$stmt->execute()) {
+            try {
 
-                $message =
-                    "Controller status query failed.";
-
-                $message_type =
-                    "error";
-
-                $stmt->close();
-
-            } else {
-
-                $result =
-                    $stmt->get_result();
-
-
-                if ($result->num_rows === 0) {
+                if ($stmt->execute()) {
 
                     $message =
-                        "Controller not found.";
+                        "Controller " .
+                        $controller_id .
+                        " updated successfully.";
 
                     $message_type =
-                        "error";
-
-                    $stmt->close();
+                        "success";
 
                 } else {
 
-                    $controller =
-                        $result->fetch_assoc();
+                    $message =
+                        "Controller update failed.";
 
-                    $stmt->close();
-
-
-                    /* -------------------------------------
-                       UPDATE ACTIVE FIELD
-                    ------------------------------------- */
-
-                    $update =
-                        $conn->prepare("
-                            UPDATE controllers
-                            SET active = ?
-                            WHERE controller_id = ?
-                        ");
-
-
-                    if (!$update) {
-
-                        $message =
-                            "Status update preparation failed.";
-
-                        $message_type =
-                            "error";
-
-                    } else {
-
-                        $update->bind_param(
-                            "is",
-                            $new_status,
-                            $controller_id
-                        );
-
-
-                        if ($update->execute()) {
-
-                            if ($new_status === 1) {
-
-                                $message =
-                                    "Controller " .
-                                    $controller_id .
-                                    " has been ACTIVATED.";
-
-                            } else {
-
-                                $message =
-                                    "Controller " .
-                                    $controller_id .
-                                    " has been DEACTIVATED.";
-                            }
-
-                            $message_type =
-                                "success";
-
-                        } else {
-
-                            $message =
-                                "Controller status update failed.";
-
-                            $message_type =
-                                "error";
-                        }
-
-
-                        $update->close();
-                    }
+                    $message_type =
+                        "error";
                 }
+
             }
+            catch (mysqli_sql_exception $e) {
+
+                if (
+                    $e->getCode() == 1062
+                ) {
+
+                    $message =
+                        "Controller ID or Device Token already exists.";
+
+                } else {
+
+                    $message =
+                        "Could not update controller.";
+                }
+
+                $message_type =
+                    "error";
+            }
+
+
+            $stmt->close();
         }
     }
 }
 
 
 /* =========================================================
-   READ CONTROLLERS
+   LOAD EDIT CONTROLLER
+========================================================= */
+
+if (
+    isset($_GET["edit"]) &&
+    trim($_GET["edit"]) !== ""
+) {
+
+    $edit_id =
+        trim(
+            $_GET["edit"]
+        );
+
+
+    $stmt =
+        $conn->prepare("
+            SELECT
+                id,
+                controller_id,
+                customer_token,
+                device_token,
+                customer_name,
+                active,
+                last_seen,
+                start_time,
+                end_time,
+                owner_start_time,
+                owner_end_time
+            FROM controllers
+            WHERE controller_id = ?
+            LIMIT 1
+        ");
+
+
+    if ($stmt) {
+
+        $stmt->bind_param(
+            "s",
+            $edit_id
+        );
+
+        $stmt->execute();
+
+        $result =
+            $stmt->get_result();
+
+
+        if (
+            $result->num_rows > 0
+        ) {
+
+            $edit_controller =
+                $result->fetch_assoc();
+
+        } else {
+
+            $message =
+                "Controller not found.";
+
+            $message_type =
+                "error";
+        }
+
+
+        $stmt->close();
+    }
+}
+
+
+/* =========================================================
+   AUTOMATICALLY TURN OFF CONTROLLERS
+   AFTER OWNER END TIME
+========================================================= */
+
+$expire_result =
+    $conn->query("
+        SELECT
+            controller_id,
+            owner_end_time,
+            active
+        FROM controllers
+        WHERE
+            owner_end_time IS NOT NULL
+            AND owner_end_time <> ''
+            AND active = 1
+    ");
+
+
+if ($expire_result) {
+
+    while (
+        $row =
+        $expire_result->fetch_assoc()
+    ) {
+
+        try {
+
+            $owner_end =
+                new DateTime(
+                    $row["owner_end_time"],
+                    new DateTimeZone("Asia/Kolkata")
+                );
+
+
+            if (
+                $current_time >= $owner_end
+            ) {
+
+                $controller_id_expired =
+                    $row["controller_id"];
+
+
+                $reset_stmt =
+                    $conn->prepare("
+                        UPDATE esp_control
+                        SET
+                            D1 = 0,
+                            D2 = 0,
+                            D3 = 0,
+                            D4 = 0,
+                            D5 = 0,
+                            D6 = 0,
+                            D7 = 0,
+                            D8 = 0
+                        WHERE controller_id = ?
+                    ");
+
+
+                if ($reset_stmt) {
+
+                    $reset_stmt->bind_param(
+                        "s",
+                        $controller_id_expired
+                    );
+
+                    $reset_stmt->execute();
+
+                    $reset_stmt->close();
+                }
+            }
+
+        }
+        catch (Exception $e) {
+
+            /* Ignore invalid date */
+        }
+    }
+}
+
+
+/* =========================================================
+   READ ALL CONTROLLERS
 ========================================================= */
 
 $controllers = [];
@@ -727,10 +1324,17 @@ $controllers = [];
 $result =
     $conn->query("
         SELECT
+            id,
             controller_id,
-            customer_name,
+            customer_token,
             device_token,
-            active
+            customer_name,
+            active,
+            last_seen,
+            start_time,
+            end_time,
+            owner_start_time,
+            owner_end_time
         FROM controllers
         ORDER BY controller_id
     ");
@@ -740,7 +1344,7 @@ if ($result) {
 
     while (
         $row =
-            $result->fetch_assoc()
+        $result->fetch_assoc()
     ) {
 
         $controllers[] =
@@ -762,7 +1366,7 @@ if ($result) {
       content="width=device-width, initial-scale=1.0">
 
 <title>
-ESP-SWITCH5 - Owner Management
+ESP-SWITCH5 - Owner Controller Management
 </title>
 
 <style>
@@ -789,13 +1393,13 @@ body {
 
 .container {
 
-    max-width: 800px;
+    max-width: 1250px;
 
-    margin: 40px auto;
+    margin: 30px auto;
 
     background: white;
 
-    padding: 30px;
+    padding: 25px;
 
     border-radius: 12px;
 
@@ -825,35 +1429,193 @@ body {
     margin-top: 5px;
 }
 
-.owner-warning {
+.current-time {
 
-    background: #fff3cd;
+    margin-top: 12px;
 
-    border: 1px solid #ffeeba;
+    padding: 10px;
 
-    color: #856404;
-
-    padding: 12px;
+    background: #e7f3ff;
 
     border-radius: 6px;
 
-    margin-bottom: 20px;
+    color: #0056b3;
+
+    font-weight: bold;
 
     text-align: center;
+}
+
+.top-buttons {
+
+    text-align: center;
+
+    margin: 20px 0;
+}
+
+.top-buttons a {
+
+    display: inline-block;
+
+    text-decoration: none;
+
+    color: white;
+
+    padding: 10px 18px;
+
+    border-radius: 6px;
+
+    margin: 4px;
 
     font-weight: bold;
 }
 
+.add-link {
 
-/* =========================================================
-   MESSAGE
-========================================================= */
+    background: #007bff;
+}
 
-.message {
+.logout-link {
+
+    background: #6c757d;
+}
+
+.form-box {
+
+    background: #f8f9fa;
+
+    border: 1px solid #ddd;
+
+    border-radius: 10px;
+
+    padding: 20px;
+
+    margin-bottom: 25px;
+}
+
+.form-box h2 {
+
+    margin-top: 0;
+
+    text-align: center;
+}
+
+label {
+
+    display: block;
+
+    font-weight: bold;
+
+    margin-bottom: 7px;
+
+    margin-top: 14px;
+}
+
+input[type="text"],
+input[type="datetime-local"],
+select {
+
+    width: 100%;
+
+    padding: 11px;
+
+    font-size: 16px;
+
+    border: 1px solid #aaa;
+
+    border-radius: 6px;
+}
+
+.owner-time-section {
+
+    margin-top: 20px;
+
+    padding: 18px;
+
+    background: #fff3cd;
+
+    border: 2px solid #ffc107;
+
+    border-radius: 10px;
+}
+
+.owner-time-section h3 {
+
+    margin-top: 0;
+
+    color: #856404;
+
+    text-align: center;
+}
+
+.owner-time-note {
+
+    margin-top: 12px;
+
+    font-size: 13px;
+
+    color: #665c3b;
+
+    text-align: center;
+
+    line-height: 1.5;
+}
+
+.form-button {
+
+    width: 100%;
 
     padding: 12px;
 
+    border: none;
+
     border-radius: 6px;
+
+    margin-top: 20px;
+
+    color: white;
+
+    font-size: 16px;
+
+    font-weight: bold;
+
+    cursor: pointer;
+}
+
+.add-button {
+
+    background: #007bff;
+}
+
+.update-button {
+
+    background: #28a745;
+}
+
+.cancel-button {
+
+    display: block;
+
+    text-align: center;
+
+    margin-top: 10px;
+
+    padding: 11px;
+
+    background: #6c757d;
+
+    color: white;
+
+    text-decoration: none;
+
+    border-radius: 6px;
+}
+
+.message {
+
+    padding: 13px;
+
+    border-radius: 7px;
 
     margin-bottom: 20px;
 
@@ -876,243 +1638,144 @@ body {
     color: #721c24;
 }
 
+.table-wrapper {
 
-/* =========================================================
-   CONTROLLER STATUS SUMMARY
-========================================================= */
+    overflow-x: auto;
 
-.status-box {
-
-    background: #f8f9fa;
-
-    border: 1px solid #ddd;
-
-    border-radius: 10px;
-
-    padding: 20px;
-
-    margin-bottom: 25px;
+    margin-top: 20px;
 }
 
-.status-box h2 {
-
-    margin-top: 0;
-
-    margin-bottom: 15px;
-
-    text-align: center;
-}
-
-.current-status {
-
-    text-align: center;
-
-    font-size: 20px;
-
-    font-weight: bold;
-
-    margin-bottom: 15px;
-}
-
-.active-status {
-
-    color: #198754;
-}
-
-.inactive-status {
-
-    color: #dc3545;
-}
-
-
-/* =========================================================
-   FORM BOX
-========================================================= */
-
-.form-box {
-
-    background: #f8f9fa;
-
-    border: 1px solid #ddd;
-
-    border-radius: 10px;
-
-    padding: 20px;
-
-    margin-bottom: 25px;
-}
-
-.form-box h2 {
-
-    margin-top: 0;
-
-    color: #333;
-
-    font-size: 20px;
-}
-
-label {
-
-    display: block;
-
-    font-weight: bold;
-
-    margin-bottom: 8px;
-}
-
-select,
-input[type="text"] {
+table {
 
     width: 100%;
 
-    padding: 12px;
+    border-collapse: collapse;
 
-    font-size: 16px;
-
-    border: 1px solid #aaa;
-
-    border-radius: 6px;
-
-    margin-bottom: 18px;
+    min-width: 1450px;
 }
 
+th {
 
-/* =========================================================
-   BUTTONS
-========================================================= */
-
-.change-button {
-
-    width: 100%;
-
-    padding: 13px;
-
-    border: none;
-
-    border-radius: 6px;
-
-    background: #dc3545;
+    background: #343a40;
 
     color: white;
 
-    font-size: 16px;
+    padding: 11px;
 
-    font-weight: bold;
-
-    cursor: pointer;
+    text-align: center;
 }
 
-.change-button:hover {
+td {
 
-    opacity: 0.85;
+    border: 1px solid #ddd;
+
+    padding: 10px;
+
+    text-align: center;
+
+    vertical-align: middle;
+}
+
+tr:nth-child(even) {
+
+    background: #f8f8f8;
+}
+
+.active {
+
+    color: #198754;
+
+    font-weight: bold;
+}
+
+.inactive {
+
+    color: #dc3545;
+
+    font-weight: bold;
+}
+
+.expired {
+
+    color: #dc3545;
+
+    font-weight: bold;
+}
+
+.valid {
+
+    color: #198754;
+
+    font-weight: bold;
+}
+
+.schedule {
+
+    white-space: nowrap;
+
+    font-size: 13px;
+}
+
+.action-button {
+
+    display: inline-block;
+
+    border: none;
+
+    border-radius: 5px;
+
+    padding: 7px 11px;
+
+    margin: 2px;
+
+    color: white;
+
+    text-decoration: none;
+
+    cursor: pointer;
+
+    font-size: 13px;
+
+    font-weight: bold;
+}
+
+.edit-button {
+
+    background: #007bff;
+}
+
+.delete-button {
+
+    background: #dc3545;
 }
 
 .activate-button {
 
-    width: 100%;
-
-    padding: 13px;
-
-    border: none;
-
-    border-radius: 6px;
-
-    background: #198754;
-
-    color: white;
-
-    font-size: 16px;
-
-    font-weight: bold;
-
-    cursor: pointer;
+    background: #28a745;
 }
 
 .deactivate-button {
 
-    width: 100%;
-
-    padding: 13px;
-
-    border: none;
-
-    border-radius: 6px;
-
-    background: #dc3545;
-
-    color: white;
-
-    font-size: 16px;
-
-    font-weight: bold;
-
-    cursor: pointer;
+    background: #6c757d;
 }
 
-.activate-button:hover,
-.deactivate-button:hover,
-.change-button:hover {
+.action-form {
 
-    opacity: 0.85;
+    display: inline;
 }
-
-
-/* =========================================================
-   NOTE
-========================================================= */
-
-.note {
-
-    margin-top: 20px;
-
-    padding: 15px;
-
-    background: #eef6ff;
-
-    border: 1px solid #b8d8f5;
-
-    border-radius: 8px;
-
-    font-size: 14px;
-
-    line-height: 1.5;
-}
-
-.logout {
-
-    display: block;
-
-    text-align: center;
-
-    margin-top: 20px;
-
-    color: #555;
-
-    text-decoration: none;
-}
-
-.logout:hover {
-
-    text-decoration: underline;
-}
-
-
-/* =========================================================
-   MOBILE
-========================================================= */
 
 @media (max-width: 600px) {
 
     body {
-
         padding: 10px;
     }
 
     .container {
+        padding: 15px;
+    }
 
-        padding: 18px;
-
-        margin-top: 15px;
+    table {
+        min-width: 1450px;
     }
 }
 
@@ -1120,31 +1783,68 @@ input[type="text"] {
 
 </head>
 
-
 <body>
 
 <div class="container">
 
 
+<!-- ======================================================
+     HEADER
+====================================================== -->
+
 <div class="header">
 
 <h1>
-ESP-SWITCH5
+ESP-SWITCH5 REMOTE
 </h1>
 
 <div class="subtitle">
-OWNER DEVICE & CONTROLLER MANAGEMENT
+OWNER CONTROLLER MANAGEMENT
+</div>
+
+<div class="current-time">
+
+CURRENT IST TIME:
+
+<?php
+
+echo $current_time->format(
+    "Y-m-d H:i:s"
+);
+
+?>
+
 </div>
 
 </div>
 
 
-<div class="owner-warning">
+<!-- ======================================================
+     TOP BUTTONS
+====================================================== -->
 
-OWNER ONLY — DO NOT GIVE THIS PAGE TO CUSTOMERS
+<div class="top-buttons">
+
+<a
+href="owner_token.php"
+class="add-link"
+>
+ADD NEW CONTROLLER
+</a>
+
+<a
+href="owner_token.php?logout=1"
+class="logout-link"
+>
+OWNER LOGOUT
+</a>
 
 </div>
 
+
+<!-- ======================================================
+     MESSAGE
+====================================================== -->
 
 <?php
 
@@ -1153,12 +1853,13 @@ if ($message !== "") {
 ?>
 
 <div
-    class="message
-    <?php
-        echo $message_type === "success"
-            ? "success"
-            : "error";
-    ?>"
+class="message
+<?php
+echo
+    $message_type === "success"
+        ? "success"
+        : "error";
+?>"
 >
 
 <?php
@@ -1181,542 +1882,974 @@ echo htmlspecialchars(
 
 
 <!-- ======================================================
-     CONTROLLER STATUS
-======================================================= -->
+     EDIT FORM
+====================================================== -->
 
-<div class="status-box">
+<?php
+
+if ($edit_controller !== null) {
+
+?>
+
+<div class="form-box">
 
 <h2>
-Controller Activation
+EDIT CONTROLLER
 </h2>
-
 
 <form method="post">
 
-<label for="status_controller_id">
-Select Controller
-</label>
-
-
-<select
-    name="controller_id"
-    id="status_controller_id"
-    required
-    onchange="showCurrentStatus()"
->
-
-<option value="">
--- Select Controller --
-</option>
-
-
-<?php
-
-foreach (
-    $controllers as $controller
-) {
-
-?>
-
-<option
-    value="<?php
-        echo htmlspecialchars(
-            $controller["controller_id"],
-            ENT_QUOTES,
-            "UTF-8"
-        );
-    ?>"
-
-    data-active="<?php
-        echo (int)$controller["active"];
-    ?>"
->
-
-<?php
-
+<input
+type="hidden"
+name="original_controller_id"
+value="<?php
 echo htmlspecialchars(
-    $controller["controller_id"],
+    $edit_controller["controller_id"],
     ENT_QUOTES,
     "UTF-8"
 );
+?>"
+>
 
 
-if (
-    !empty(
-        $controller["customer_name"]
-    )
-) {
+<label>
+Controller ID
+</label>
 
-    echo
-        " - " .
-        htmlspecialchars(
-            $controller["customer_name"],
-            ENT_QUOTES,
-            "UTF-8"
-        );
-}
+<input
+type="text"
+name="controller_id"
+maxlength="50"
+value="<?php
+echo htmlspecialchars(
+    $edit_controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+required
+>
 
+
+<label>
+Customer Token
+</label>
+
+<input
+type="text"
+name="customer_token"
+maxlength="100"
+value="<?php
+echo htmlspecialchars(
+    $edit_controller["customer_token"] ?? "",
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+autocomplete="off"
+>
+
+
+<label>
+Device Token
+</label>
+
+<input
+type="text"
+name="device_token"
+maxlength="100"
+value="<?php
+echo htmlspecialchars(
+    $edit_controller["device_token"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+autocomplete="off"
+required
+>
+
+
+<label>
+Customer Name
+</label>
+
+<input
+type="text"
+name="customer_name"
+maxlength="100"
+value="<?php
+echo htmlspecialchars(
+    $edit_controller["customer_name"] ?? "",
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+>
+
+
+<label>
+Status
+</label>
+
+<select name="active">
+
+<option
+value="1"
+<?php
+echo
+    ((int)$edit_controller["active"] === 1)
+        ? "selected"
+        : "";
 ?>
-
+>
+ACTIVE
 </option>
 
+<option
+value="0"
 <?php
-
-}
-
+echo
+    ((int)$edit_controller["active"] === 0)
+        ? "selected"
+        : "";
 ?>
+>
+INACTIVE
+</option>
 
 </select>
 
 
-<div
-    id="currentStatus"
-    class="current-status"
+<!-- ====================================================
+     OWNER TIME
+===================================================== -->
+
+<div class="owner-time-section">
+
+<h3>
+OWNER TIME CONTROL
+</h3>
+
+
+<label>
+OWNER START TIME
+</label>
+
+<input
+type="datetime-local"
+name="owner_start_time"
+value="<?php
+echo htmlspecialchars(
+    datetime_local_value(
+        $edit_controller["owner_start_time"] ?? ""
+    ),
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
 >
-Select a controller.
+
+
+<label>
+OWNER END TIME
+</label>
+
+<input
+type="datetime-local"
+name="owner_end_time"
+value="<?php
+echo htmlspecialchars(
+    datetime_local_value(
+        $edit_controller["owner_end_time"] ?? ""
+    ),
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+>
+
+
+<div class="owner-time-note">
+
+<strong>OWNER CONTROL:</strong>
+
+The owner END TIME is the maximum time
+the customer is allowed to operate.
+
+<br>
+
+For example, if customer END TIME is
+14:48 and owner END TIME is 14:43,
+the controller will stop at 14:43.
+
+<br>
+
+Timezone: Asia/Kolkata (IST)
+
+</div>
+
 </div>
 
 
-<div id="statusButtonArea">
-
-</div>
-
-
-<input
-    type="hidden"
-    name="new_status"
-    id="new_status"
-    value=""
+<button
+type="submit"
+name="update_controller"
+class="form-button update-button"
 >
+UPDATE CONTROLLER
+</button>
 
-<input
-    type="hidden"
-    name="change_status"
-    value="1"
+
+<a
+href="owner_token.php"
+class="cancel-button"
 >
+CANCEL EDIT
+</a>
 
 </form>
 
 </div>
 
+<?php
+
+} else {
+
+?>
+
 
 <!-- ======================================================
-     DEVICE TOKEN MANAGEMENT
-======================================================= -->
+     ADD FORM
+====================================================== -->
 
 <div class="form-box">
 
 <h2>
-Device Token Management
+ADD NEW CONTROLLER
 </h2>
-
 
 <form method="post">
 
 
-<label for="token_controller_id">
-
-Select Controller
-
+<label>
+Controller ID
 </label>
 
-
-<select
-    name="controller_id"
-    id="token_controller_id"
-    required
+<input
+type="text"
+name="controller_id"
+maxlength="50"
+placeholder="Example: ESP0001"
+required
+autocomplete="off"
 >
 
-<option value="">
--- Select Controller --
-</option>
 
+<label>
+Customer Token
+</label>
 
-<?php
-
-foreach (
-    $controllers as $controller
-) {
-
-?>
-
-<option
-    value="<?php
-        echo htmlspecialchars(
-            $controller["controller_id"],
-            ENT_QUOTES,
-            "UTF-8"
-        );
-    ?>"
+<input
+type="text"
+name="customer_token"
+maxlength="100"
+placeholder="Example: ESP0001-CUST-ABC123"
+autocomplete="off"
 >
 
-<?php
 
-echo htmlspecialchars(
-    $controller["controller_id"],
-    ENT_QUOTES,
-    "UTF-8"
-);
+<label>
+Device Token
+</label>
+
+<input
+type="text"
+name="device_token"
+maxlength="100"
+placeholder="Example: ESP0001-TOKEN-2026-RAVI1"
+required
+autocomplete="off"
+>
 
 
-if (
-    !empty(
-        $controller["customer_name"]
-    )
-) {
+<label>
+Customer Name
+</label>
 
-    echo
-        " - " .
-        htmlspecialchars(
-            $controller["customer_name"],
-            ENT_QUOTES,
-            "UTF-8"
-        );
-}
+<input
+type="text"
+name="customer_name"
+maxlength="100"
+placeholder="Example: Test Customer"
+>
 
-?>
 
+<label>
+Status
+</label>
+
+<select name="active">
+
+<option value="1">
+ACTIVE
 </option>
 
-<?php
-
-}
-
-?>
+<option value="0">
+INACTIVE
+</option>
 
 </select>
 
 
-<label for="new_token">
+<div class="owner-time-section">
 
-Enter New Device Token
+<h3>
+OWNER TIME CONTROL
+</h3>
 
+
+<label>
+OWNER START TIME
 </label>
 
+<input
+type="datetime-local"
+name="owner_start_time"
+>
+
+
+<label>
+OWNER END TIME
+</label>
 
 <input
-    type="text"
-    name="new_token"
-    id="new_token"
-    placeholder="Example: ESP0001-TOKEN-2026-RAVI1"
-    maxlength="100"
-    required
-    autocomplete="off"
+type="datetime-local"
+name="owner_end_time"
 >
+
+
+<div class="owner-time-note">
+
+Leave both blank if no owner time restriction
+is required.
+
+<br>
+
+Timezone: Asia/Kolkata (IST)
+
+</div>
+
+</div>
 
 
 <button
-    type="submit"
-    name="change_token"
-    class="change-button"
-    onclick="
-        return confirm(
-            'Are you sure you want to change the Device Token?'
-        );
-    "
+type="submit"
+name="add_controller"
+class="form-button add-button"
 >
-
-CHANGE DEVICE TOKEN
-
+ADD CONTROLLER
 </button>
 
 </form>
 
 </div>
 
+<?php
+
+}
+
+?>
+
 
 <!-- ======================================================
-     IMPORTANT INFORMATION
-======================================================= -->
+     ALL CONTROLLERS
+====================================================== -->
 
-<div class="note">
+<div class="form-box">
 
-<strong>Controller Activation:</strong><br><br>
+<h2>
+ALL CONTROLLERS
+</h2>
 
-<strong>ACTIVE</strong> means the controller is authorized
-to communicate with the remote server.<br><br>
+<div class="table-wrapper">
 
-<strong>DEACTIVATED</strong> means the controller is
-temporarily disconnected from the customer's service.
+<table>
 
-When a controller is deactivated:
+<thead>
 
-<ul>
+<tr>
 
-<li>
-The server rejects normal ESP8266 communication.
-</li>
+<th>ID</th>
 
-<li>
-The controller cannot receive new D1-D8 commands.
-</li>
+<th>CONTROLLER ID</th>
 
-<li>
-The existing device token remains unchanged.
-</li>
+<th>CUSTOMER TOKEN</th>
 
-</ul>
+<th>DEVICE TOKEN</th>
 
-When the controller is activated again, the same
-controller ID and device token can be used again.
+<th>CUSTOMER NAME</th>
 
-<br><br>
+<th>STATUS</th>
 
-<strong>Device Token:</strong><br><br>
+<th>CUSTOMER START</th>
 
-Changing the Device Token replaces the existing
-<strong>controllers.device_token</strong> value.
+<th>CUSTOMER END</th>
 
-The ESP8266 must then be programmed with exactly
-the same new token.
+<th>OWNER START</th>
 
-</div>
+<th>OWNER END</th>
 
+<th>LAST SEEN</th>
+
+<th>ACTIONS</th>
+
+</tr>
+
+</thead>
+
+<tbody>
+
+<?php
+
+if (
+    count($controllers) === 0
+) {
+
+?>
+
+<tr>
+
+<td colspan="12">
+No controllers found.
+</td>
+
+</tr>
+
+<?php
+
+} else {
+
+    foreach (
+        $controllers
+        as $controller
+    ) {
+
+?>
+
+<tr>
+
+
+<td>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</td>
+
+
+<td>
+
+<strong>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</strong>
+
+</td>
+
+
+<td>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["customer_token"] ?? "",
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</td>
+
+
+<td>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["device_token"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</td>
+
+
+<td>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["customer_name"] ?? "",
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</td>
+
+
+<td>
+
+<?php
+
+if (
+    (int)$controller["active"] === 1
+) {
+
+?>
+
+<span class="active">
+ACTIVE
+</span>
+
+<?php
+
+} else {
+
+?>
+
+<span class="inactive">
+INACTIVE
+</span>
+
+<?php
+
+}
+
+?>
+
+</td>
+
+
+<td class="schedule">
+
+<?php
+
+echo
+    !empty($controller["start_time"])
+        ? htmlspecialchars(
+            $controller["start_time"],
+            ENT_QUOTES,
+            "UTF-8"
+        )
+        : "Not set";
+
+?>
+
+</td>
+
+
+<td class="schedule">
+
+<?php
+
+echo
+    !empty($controller["end_time"])
+        ? htmlspecialchars(
+            $controller["end_time"],
+            ENT_QUOTES,
+            "UTF-8"
+        )
+        : "Not set";
+
+?>
+
+</td>
+
+
+<td class="schedule">
+
+<?php
+
+echo
+    !empty($controller["owner_start_time"])
+        ? htmlspecialchars(
+            $controller["owner_start_time"],
+            ENT_QUOTES,
+            "UTF-8"
+        )
+        : "Not set";
+
+?>
+
+</td>
+
+
+<td class="schedule">
+
+<?php
+
+if (
+    !empty($controller["owner_end_time"])
+) {
+
+    try {
+
+        $owner_end_display =
+            new DateTime(
+                $controller["owner_end_time"],
+                new DateTimeZone("Asia/Kolkata")
+            );
+
+        if (
+            $current_time >=
+            $owner_end_display
+        ) {
+
+?>
+
+<span class="expired">
+
+<?php
+
+echo htmlspecialchars(
+    $controller["owner_end_time"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+<br>
+
+EXPIRED
+
+</span>
+
+<?php
+
+        } else {
+
+?>
+
+<span class="valid">
+
+<?php
+
+echo htmlspecialchars(
+    $controller["owner_end_time"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</span>
+
+<?php
+
+        }
+
+    }
+    catch (Exception $e) {
+
+        echo htmlspecialchars(
+            $controller["owner_end_time"],
+            ENT_QUOTES,
+            "UTF-8"
+        );
+    }
+
+} else {
+
+    echo "Not set";
+}
+
+?>
+
+</td>
+
+
+<td>
+
+<?php
+
+echo htmlspecialchars(
+    $controller["last_seen"] ??
+    "Not yet seen",
+    ENT_QUOTES,
+    "UTF-8"
+);
+
+?>
+
+</td>
+
+
+<td>
+
+
+<!-- EDIT -->
 
 <a
-    href="owner_token.php?logout=1"
-    class="logout"
+href="owner_token.php?edit=<?php
+echo rawurlencode(
+    $controller["controller_id"]
+);
+?>"
+class="action-button edit-button"
 >
-Owner Logout
+EDIT
 </a>
 
 
+<!-- ACTIVATE / DEACTIVATE -->
+
+<?php
+
+if (
+    (int)$controller["active"] === 1
+) {
+
+?>
+
+<form
+method="post"
+class="action-form"
+onsubmit="return confirm(
+    'Deactivate controller <?php
+    echo htmlspecialchars(
+        $controller["controller_id"],
+        ENT_QUOTES,
+        "UTF-8"
+    );
+    ?>?'
+);"
+>
+
+<input
+type="hidden"
+name="controller_id"
+value="<?php
+echo htmlspecialchars(
+    $controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+>
+
+<button
+type="submit"
+name="deactivate_controller"
+class="action-button deactivate-button"
+>
+DEACTIVATE
+</button>
+
+</form>
+
+<?php
+
+} else {
+
+?>
+
+<form
+method="post"
+class="action-form"
+onsubmit="return confirm(
+    'Activate controller <?php
+    echo htmlspecialchars(
+        $controller["controller_id"],
+        ENT_QUOTES,
+        "UTF-8"
+    );
+    ?>?'
+);"
+>
+
+<input
+type="hidden"
+name="controller_id"
+value="<?php
+echo htmlspecialchars(
+    $controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+>
+
+<button
+type="submit"
+name="activate_controller"
+class="action-button activate-button"
+>
+ACTIVATE
+</button>
+
+</form>
+
+<?php
+
+}
+
+?>
+
+
+<!-- DELETE -->
+
+<form
+method="post"
+class="action-form"
+onsubmit="return confirm(
+    'WARNING!\\n\\n' +
+    'Permanently DELETE controller <?php
+    echo htmlspecialchars(
+        $controller["controller_id"],
+        ENT_QUOTES,
+        "UTF-8"
+    );
+    ?>?\\n\\n' +
+    'This action cannot be undone.'
+);"
+>
+
+<input
+type="hidden"
+name="controller_id"
+value="<?php
+echo htmlspecialchars(
+    $controller["controller_id"],
+    ENT_QUOTES,
+    "UTF-8"
+);
+?>"
+>
+
+<button
+type="submit"
+name="delete_controller"
+class="action-button delete-button"
+>
+DELETE
+</button>
+
+</form>
+
+
+</td>
+
+</tr>
+
+<?php
+
+    }
+
+}
+
+?>
+
+</tbody>
+
+</table>
+
+</div>
+
 </div>
 
 
-<script>
+<!-- ======================================================
+     IMPORTANT INFORMATION
+====================================================== -->
 
-/* =========================================================
-   DISPLAY CURRENT STATUS
-========================================================= */
+<div class="form-box">
 
-function showCurrentStatus()
-{
+<strong>
+OWNER CONTROL:
+</strong>
 
-    const select =
-        document.getElementById(
-            "status_controller_id"
-        );
+<br><br>
 
-    const status =
-        document.getElementById(
-            "currentStatus"
-        );
+<strong>
+Customer START/END
+</strong>
+are stored in:
 
-    const buttonArea =
-        document.getElementById(
-            "statusButtonArea"
-        );
+<strong>
+start_time / end_time
+</strong>
 
+<br><br>
 
-    if (
-        !select ||
-        !status ||
-        !buttonArea
-    ) {
+<strong>
+Owner START/END
+</strong>
+are stored in:
 
-        return;
-    }
+<strong>
+owner_start_time / owner_end_time
+</strong>
 
+<br><br>
 
-    const selectedOption =
-        select.options[
-            select.selectedIndex
-        ];
+The owner END TIME is the maximum permitted
+operating time for the customer.
 
+<br><br>
 
-    if (
-        !selectedOption ||
-        !selectedOption.value
-    ) {
+Example:
 
-        status.innerHTML =
-            "Select a controller.";
+<br><br>
 
-        status.className =
-            "current-status";
+Customer END = <strong>14:48</strong>
 
-        buttonArea.innerHTML =
-            "";
+<br>
 
-        return;
-    }
+Owner END = <strong>14:43</strong>
 
+<br><br>
 
-    const active =
-        selectedOption.getAttribute(
-            "data-active"
-        );
+Actual permitted END = <strong>14:43</strong>.
 
+<br><br>
 
-    if (active === "1")
-    {
+When the owner END TIME has passed,
+this page resets D1-D8 in the
+<strong>esp_control</strong> table to zero.
 
-        status.innerHTML =
-            "● ACTIVE";
+<br><br>
 
-        status.className =
-            "current-status active-status";
+The <strong>api.php</strong> must also enforce the same
+owner END TIME because the ESP8266 communicates directly
+with the API.
 
+</div>
 
-        buttonArea.innerHTML =
 
-            '<button ' +
-
-            'type="button" ' +
-
-            'class="deactivate-button" ' +
-
-            'onclick="deactivateController()">' +
-
-            'DEACTIVATE CONTROLLER' +
-
-            '</button>';
-
-    }
-    else
-    {
-
-        status.innerHTML =
-            "● DEACTIVATED";
-
-        status.className =
-            "current-status inactive-status";
-
-
-        buttonArea.innerHTML =
-
-            '<button ' +
-
-            'type="button" ' +
-
-            'class="activate-button" ' +
-
-            'onclick="activateController()">' +
-
-            'ACTIVATE CONTROLLER' +
-
-            '</button>';
-    }
-}
-
-
-/* =========================================================
-   ACTIVATE
-========================================================= */
-
-function activateController()
-{
-
-    const select =
-        document.getElementById(
-            "status_controller_id"
-        );
-
-    const selected =
-        select.options[
-            select.selectedIndex
-        ];
-
-    if (
-        !selected ||
-        !selected.value
-    ) {
-
-        return;
-    }
-
-
-    const controller =
-        selected.value;
-
-
-    const answer =
-        confirm(
-            "Activate controller " +
-            controller +
-            "?"
-        );
-
-
-    if (!answer)
-    {
-        return;
-    }
-
-
-    document.getElementById(
-        "new_status"
-    ).value = "1";
-
-
-    select.form.submit();
-}
-
-
-/* =========================================================
-   DEACTIVATE
-========================================================= */
-
-function deactivateController()
-{
-
-    const select =
-        document.getElementById(
-            "status_controller_id"
-        );
-
-    const selected =
-        select.options[
-            select.selectedIndex
-        ];
-
-    if (
-        !selected ||
-        !selected.value
-    ) {
-
-        return;
-    }
-
-
-    const controller =
-        selected.value;
-
-
-    const answer =
-        confirm(
-            "Deactivate controller " +
-            controller +
-            "?\n\n" +
-            "The customer's controller will " +
-            "temporarily lose remote service."
-        );
-
-
-    if (!answer)
-    {
-        return;
-    }
-
-
-    document.getElementById(
-        "new_status"
-    ).value = "0";
-
-
-    select.form.submit();
-}
-
-
-/* =========================================================
-   INITIAL STATUS
-========================================================= */
-
-showCurrentStatus();
-
-</script>
-
+</div>
 
 </body>
 
