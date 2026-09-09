@@ -34,7 +34,7 @@ if (!preg_match('/^[A-Za-z0-9_-]+$/', $controller_id)) {
 ========================================================= */
 
 $controller_url =
-    "https://esp-switch5b-remote.onrender.com/c/" .
+    "https://esp-switch5a-remote.onrender.com/c/" .
     rawurlencode($controller_id);
 
 ?>
