@@ -1,14 +1,23 @@
-
+```php
 <?php
 
 /*
 ============================================================
- ESP-SWITCH5B REMOTE
+ ESP-SWITCH5 REMOTE
  QR CODE PAGE
 ============================================================
 */
 
-$controller_id = trim($_GET["controller_id"] ?? "");
+require_once __DIR__ . "/config.php";
+require_once __DIR__ . "/db.php";
+
+
+/* =========================================================
+   GET CONTROLLER ID
+========================================================= */
+
+$controller_id =
+    trim($_GET["controller_id"] ?? "");
 
 
 /* =========================================================
@@ -30,12 +39,89 @@ if (!preg_match('/^[A-Za-z0-9_-]+$/', $controller_id)) {
 
 
 /* =========================================================
+   GET CUSTOMER TOKEN FOR THIS CONTROLLER
+========================================================= */
+
+$stmt = $conn->prepare("
+    SELECT
+        controller_id,
+        customer_token,
+        customer_name
+    FROM controllers
+    WHERE controller_id = ?
+    LIMIT 1
+");
+
+
+if (!$stmt) {
+    die("Database preparation failed.");
+}
+
+
+$stmt->bind_param(
+    "s",
+    $controller_id
+);
+
+
+if (!$stmt->execute()) {
+
+    $stmt->close();
+
+    die("Database query failed.");
+}
+
+
+$result =
+    $stmt->get_result();
+
+
+/* =========================================================
+   CHECK CONTROLLER EXISTS
+========================================================= */
+
+if ($result->num_rows === 0) {
+
+    $stmt->close();
+
+    die("Controller not found.");
+}
+
+
+$controller =
+    $result->fetch_assoc();
+
+
+$stmt->close();
+
+
+/* =========================================================
+   GET CUSTOMER TOKEN
+========================================================= */
+
+$customer_token =
+    trim(
+        $controller["customer_token"] ?? ""
+    );
+
+
+if ($customer_token === "") {
+
+    die(
+        "Customer token is not available for this controller."
+    );
+}
+
+
+/* =========================================================
    CREATE CUSTOMER CONTROLLER URL
 ========================================================= */
 
 $controller_url =
     "https://esp-switch5a-remote.onrender.com/c/" .
-    rawurlencode($controller_id);
+    rawurlencode($controller_id) .
+    "?t=" .
+    rawurlencode($customer_token);
 
 ?>
 
@@ -273,7 +359,7 @@ button:hover,
 
 
 <h1>
-ESP-SWITCH5B REMOTE
+ESP-SWITCH5 REMOTE
 </h1>
 
 
@@ -536,4 +622,4 @@ function downloadQR()
 </body>
 
 </html>
-
+```
